@@ -1,0 +1,306 @@
+##Consumer
+##Consumer — это клиент Kafka, грубо говоря, который вычитывает сообщения из Kafka брокера.
+
+##KafkaConsumerService.java .
+
+##KafkaConsumerService.java
+
+
+
+package ru.homecredit.snitches.service;
+ 
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.messaging.Message;
+import org.springframework.stereotype.Service;
+ 
+import java.util.List;
+ 
+@Service
+@Slf4j
+@RequiredArgsConstructor
+public class KafkaConsumerService {
+ 
+    private final EsStopListService esStopListService;
+ 
+    @KafkaListener(topics = "${kafka.update-stop-list-topic}",
+            groupId = "${kafka.update-stop-list-group-id}",
+            containerFactory = "kafkaListenerContainerFactory")
+    public void listen(List<Message<String>> data, Acknowledgment acknowledgment) {
+ 
+        try {
+            esStopListService.batchUpdateStopList(data);
+            acknowledgment.acknowledge();
+        } catch (Exception e) {
+            log.error("Error reading messages", e);
+            acknowledgment.nack(0, 10000);
+        }
+    }
+}
+
+
+KafkaConsumerConfig.java . Config консьюмера
+
+KafkaConsumerConfig.java
+
+package ru.homecredit.snitches.config.kafka;
+ 
+import lombok.RequiredArgsConstructor;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.annotation.EnableKafka;
+import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
+import org.springframework.kafka.core.ConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.listener.ContainerProperties;
+import ru.homecredit.snitches.config.kafka.properties.KafkaSecurityPropertiesHolder;
+ 
+import java.util.Map;
+ 
+@EnableKafka
+@Configuration
+@RequiredArgsConstructor
+public class KafkaConsumerConfig {
+ 
+    @Bean
+    public ConsumerFactory<String, String> consumerFactory(KafkaProperties kafkaProperties,
+                                                           @Autowired(required = false) KafkaSecurityPropertiesHolder kafkaSecurityPropertiesHolder) {
+ 
+        Map<String, Object> props = kafkaProperties.getConsumer().buildProperties();
+ 
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+ 
+        if (kafkaSecurityPropertiesHolder != null) {
+            props.putAll(kafkaSecurityPropertiesHolder.getKafkaSecurityProperties());
+        }
+ 
+        return new DefaultKafkaConsumerFactory<>(props);
+    }
+ 
+    @Bean
+    public ConcurrentKafkaListenerContainerFactory<String, String> kafkaListenerContainerFactory(ConsumerFactory<String, String> consumerFactory) {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory = new ConcurrentKafkaListenerContainerFactory<>();
+        factory.getContainerProperties().setAckMode(ContainerProperties.AckMode.MANUAL_IMMEDIATE);
+        factory.setBatchListener(true);
+        factory.setConsumerFactory(consumerFactory);
+        return factory;
+    }
+ 
+}
+
+KafkaSecurityConfig.java . Конфиг для аутентификации консьюмера.
+
+KafkaSecurityConfig.java
+
+package ru.homecredit.snitches.config.kafka.properties;
+ 
+import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+import org.springframework.validation.annotation.Validated;
+ 
+import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.NotNull;
+ 
+@Data
+@Component
+@ConfigurationProperties("spring.kafka.oauth")
+@Validated
+public class KafkaOauthProperties {
+    @NotBlank
+    private String url;
+    @NotBlank
+    private String grantType;
+    @NotBlank
+    private String scope;
+    @NotNull
+    private String clientId;
+    @NotNull
+    private String clientSecret;
+}
+
+Producer.
+Producer — это клиент Kafka, который записывает в топик сообщения.
+
+KafkaService.java
+
+package ru.homecredit.snitchback.kafka.service;
+ 
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.messaging.Message;
+import org.springframework.stereotype.Service;
+ 
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+ 
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class KafkaService {
+ 
+    private final KafkaTemplate<String, String> kafkaTemplate;
+ 
+    public void sendMessage(Message<String> message) throws InterruptedException, ExecutionException, TimeoutException {
+        kafkaTemplate.send(message).get(10, TimeUnit.SECONDS);
+    }
+
+KafkaProducerConfig.java . Конфиг продюсера.
+
+KafkaService.java
+
+
+package ru.homecredit.snitchback.kafka.configuration;
+ 
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringSerializer;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.ProducerFactory;
+import ru.homecredit.snitchback.kafka.properties.KafkaSecurityPropertiesHolder;
+ 
+import java.util.Map;
+ 
+@Configuration
+public class KafkaProducerConfig {
+ 
+    @Bean
+    public ProducerFactory<Object, Object> producerFactory(KafkaProperties kafkaProperties,
+                                                           @Autowired(required = false) KafkaSecurityPropertiesHolder kafkaSecurityPropertiesHolder) {
+ 
+        Map<String, Object> props = kafkaProperties.getProducer().buildProperties();
+ 
+        props.put(ProducerConfig.LINGER_MS_CONFIG, 1);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+ 
+        if (kafkaSecurityPropertiesHolder != null) {
+            props.putAll(kafkaSecurityPropertiesHolder.getKafkaSecurityProperties());
+        }
+ 
+        return new DefaultKafkaProducerFactory<>(props);
+    }
+}
+
+KafkaSecurityConfig.java . Конфиг для аутентификации продюсера.
+
+KafkaService.java
+
+package ru.homecredit.snitchback.kafka.configuration;
+ 
+import lombok.RequiredArgsConstructor;
+import org.apache.kafka.common.config.SslConfigs;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Profile;
+import ru.homecredit.kafka.oauth.KafkaOAuthProperties;
+import ru.homecredit.snitchback.kafka.properties.KafkaOauthProperties;
+import ru.homecredit.snitchback.kafka.properties.KafkaSecurityPropertiesHolder;
+ 
+import javax.annotation.PostConstruct;
+import java.util.HashMap;
+import java.util.Map;
+ 
+@Configuration
+@RequiredArgsConstructor
+public class KafkaSecurityConfig {
+ 
+    private final KafkaOauthProperties kafkaOauthProperties;
+ 
+    //to avoid loading as resource
+    @Value("${spring.kafka.ssl.trust-store-location}")
+    private String trustStoreLocation;
+ 
+    @PostConstruct
+    public void initKafkaOauth() {
+        KafkaOAuthProperties oAuthProperties = KafkaOAuthProperties.INSTANCE;
+        oAuthProperties.setOauthUlr(kafkaOauthProperties.getUrl());
+        oAuthProperties.setOauthClientId(kafkaOauthProperties.getClientId());
+        oAuthProperties.setOauthClientSecret(kafkaOauthProperties.getClientSecret());
+        oAuthProperties.setOauthLoginScope(kafkaOauthProperties.getScope());
+        oAuthProperties.setOauthKafkaScope(kafkaOauthProperties.getScope());
+    }
+ 
+    @Bean
+    @Profile("!test")
+    //embedded kafka, used in tests, supports plain text only https://github.com/spring-projects/spring-kafka/issues/1120
+    public KafkaSecurityPropertiesHolder kafkaSecurityProperties(KafkaProperties kafkaProperties) {
+ 
+        Map<String, Object> securityProperties = new HashMap<>();
+ 
+        securityProperties.put(SslConfigs.SSL_TRUSTSTORE_LOCATION_CONFIG, trustStoreLocation);
+        securityProperties.put(SslConfigs.SSL_TRUSTSTORE_PASSWORD_CONFIG, kafkaProperties.getSsl().getTrustStorePassword());
+        securityProperties.put("sasl.jaas.config", "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;");
+        securityProperties.put("security.protocol", "SASL_SSL");
+        securityProperties.put("sasl.mechanism", "OAUTHBEARER");
+        securityProperties.put("sasl.login.callback.handler.class", "ru.homecredit.kafka.oauth.OAuthCallbackHandler");
+ 
+        return new KafkaSecurityPropertiesHolder(securityProperties);
+    }
+}
+
+Файлы параметров.
+Нужны и для продюсера, и для консьюмера.
+
+KafkaOauthProperties.java
+
+KafkaOauthProperties.java
+
+package ru.homecredit.snitches.config.kafka.properties;
+ 
+import lombok.Data;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.stereotype.Component;
+import org.springframework.validation.annotation.Validated;
+ 
+import javax.validation.constraints.NotBlank;
+import javax.validation.constraints.NotNull;
+ 
+@Data
+@Component
+@ConfigurationProperties("spring.kafka.oauth")
+@Validated
+public class KafkaOauthProperties {
+    @NotBlank
+    private String url;
+    @NotBlank
+    private String grantType;
+    @NotBlank
+    private String scope;
+    @NotNull
+    private String clientId;
+    @NotNull
+    private String clientSecret;
+}
+
+KafkaSecurityPropertiesHolder.java
+
+KafkaSecurityPropertiesHolder.java
+
+package ru.homecredit.snitches.config.kafka.properties;
+ 
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+ 
+import java.util.Map;
+ 
+@RequiredArgsConstructor
+@Getter
+public class KafkaSecurityPropertiesHolder {
+    private final Map<String, Object> kafkaSecurityProperties;
+}
